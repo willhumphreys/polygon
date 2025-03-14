@@ -1,12 +1,14 @@
 import os
 import time
 import pandas as pd
+import boto3
+import subprocess
+from datetime import datetime
 from dotenv import load_dotenv
 from polygon import RESTClient
 
 # Load environment variables from .env file
 load_dotenv()
-
 
 output_dir = "output"
 # Create the directory if it doesn't exist
@@ -18,6 +20,10 @@ if not api_key:
     raise ValueError("Please set the POLYGON_API_KEY in your .env file.")
 
 client = RESTClient(api_key)
+
+# Initialize S3 client
+s3_client = boto3.client('s3')
+
 
 def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute', max_retries=3):
     """
@@ -55,6 +61,57 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     print(f"Exceeded maximum retries for {ticker}.")
     return None
 
+
+def compress_and_upload_to_s3(file_path, ticker, source='polygon', asset_type='stocks', exchange='NASDAQ',
+                              currency='USD', timeframe='1min', quality='raw'):
+    """
+    Compress the CSV file using LZO (via lzop command-line tool) and upload it to S3
+    with proper naming convention and tags.
+    """
+    try:
+        # Create compressed file path
+        compressed_file_path = file_path + '.lzo'
+
+        # Compress using lzop command-line tool
+        print(f"Compressing {file_path} to {compressed_file_path}...")
+        subprocess.run(["lzop", "-o", compressed_file_path, file_path], check=True)
+
+        # Get current date and time for file path construction
+        now = datetime.now()
+        date_str = now.strftime('%Y-%m-%d')
+        year = now.strftime('%Y')
+        month = now.strftime('%m')
+        day = now.strftime('%d')
+        hour = now.strftime('%H')
+        datetime_str = now.strftime('%Y%m%d%H%M')
+
+        # Construct the S3 key (path)
+        s3_key = f"{asset_type}/{ticker}/{source}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{datetime_str}.csv.lzo"
+
+        # Upload the file to S3
+        print(f"Uploading {compressed_file_path} to S3...")
+        s3_bucket = 'mochi-tickdata-historical'
+        s3_client.upload_file(
+            compressed_file_path,
+            s3_bucket,
+            s3_key,
+            ExtraArgs={
+                'Tagging': f"asset_type={asset_type}&symbol={ticker}&source={source}&exchange={exchange}&"
+                           f"currency={currency}&timeframe={timeframe}&date={date_str}&quality={quality}"
+            }
+        )
+
+        print(f"Successfully uploaded {ticker} data to s3://{s3_bucket}/{s3_key}")
+
+        # Clean up temporary compressed file
+        os.remove(compressed_file_path)
+
+    except subprocess.CalledProcessError as e:
+        print(f"Error compressing file {file_path}: {e}")
+    except Exception as e:
+        print(f"Error uploading {ticker} data to S3: {e}")
+
+
 def main():
     # Load the CSV file containing the tickers.
     tickers_df = pd.read_csv("tickers.csv")
@@ -74,8 +131,21 @@ def main():
             output_filename = os.path.join(output_dir, f"{ticker}_historical.csv")
             df.to_csv(output_filename, index=False)
             print(f"Saved data for {ticker} to {output_filename}")
+
+            # Compress and upload the file to S3
+            compress_and_upload_to_s3(
+                output_filename,
+                ticker,
+                source='polygon',
+                asset_type='stocks',
+                exchange='NASDAQ',  # You might want to get this from your data
+                currency='USD',
+                timeframe='1min',
+                quality='raw'
+            )
         else:
             print(f"No data returned for {ticker}.")
+
 
 if __name__ == "__main__":
     main()
