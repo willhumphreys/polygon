@@ -100,9 +100,10 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, source='polygon', tim
         s3_bucket = os.getenv("S3_BUCKET", "mochi-tickdata-historical")
 
         # Construct the S3 key (path)
-        s3_key = f"{asset_type}/{ticker}/{source}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{datetime_str}.csv.lzo"
+        s3_key = f"{asset_type}/{ticker}/{source}/{timeframe}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{timeframe}_{datetime_str}.csv.lzo"
 
-        # Build a comprehensive tag string from metadata
+
+# Build a comprehensive tag string from metadata
         tag_parts = [
             f"asset_type={asset_type}",
             f"symbol={ticker}",
@@ -174,28 +175,45 @@ def main():
     from_date = "2023-03-15"
     to_date = "2023-03-20"
 
+    # Define the timeframes to fetch
+    timeframes = [
+        {'multiplier': 1, 'timespan': 'minute', 'label': '1min'},
+        {'multiplier': 1, 'timespan': 'hour', 'label': '1hour'},
+        {'multiplier': 1, 'timespan': 'day', 'label': '1day'}
+    ]
+
     for ticker in tickers:
-        print(f"Fetching minute data for {ticker}...")
-        data = get_historical_data(ticker, from_date, to_date)
+        ticker_metadata = get_ticker_metadata(ticker)
 
-        if data:
-            # Convert the list of Agg objects or dict results to a pandas DataFrame.
-            df = pd.DataFrame(data)
-            output_filename = os.path.join(output_dir, f"{ticker}_historical.csv")
-            df.to_csv(output_filename, index=False)
-            print(f"Saved data for {ticker} to {output_filename}")
-
-            # Compress and upload the file to S3
-            compress_and_upload_to_s3(
-                output_filename,
+        for tf in timeframes:
+            print(f"Fetching {tf['label']} data for {ticker}...")
+            data = get_historical_data(
                 ticker,
-                metadata=get_ticker_metadata(ticker),
-                source='polygon',
-                timeframe='1min',
-                quality='raw'
+                from_date,
+                to_date,
+                multiplier=tf['multiplier'],
+                timespan=tf['timespan']
             )
-        else:
-            print(f"No data returned for {ticker}.")
+
+            if data:
+                # Convert the list of Agg objects or dict results to a pandas DataFrame.
+                df = pd.DataFrame(data)
+                output_filename = os.path.join(output_dir, f"{ticker}_{tf['label']}_historical.csv")
+                df.to_csv(output_filename, index=False)
+                print(f"Saved {tf['label']} data for {ticker} to {output_filename}")
+
+                # Compress and upload the file to S3
+                compress_and_upload_to_s3(
+                    output_filename,
+                    ticker,
+                    metadata=ticker_metadata,
+                    source='polygon',
+                    timeframe=tf['label'],
+                    quality='raw'
+                )
+            else:
+                print(f"No {tf['label']} data returned for {ticker}.")
+
 
 def get_ticker_metadata(ticker):
     """
