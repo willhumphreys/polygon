@@ -63,19 +63,27 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     return None
 
 
-def compress_and_upload_to_s3(file_path, ticker, source='polygon', asset_type='stocks', exchange='NASDAQ',
-                              currency='USD', timeframe='1min', quality='raw'):
+def compress_and_upload_to_s3(file_path, ticker, metadata, source='polygon', timeframe='1min', quality='raw'):
     """
-    Compress the CSV file using LZO (via lzop command-line tool) and upload it to S3
-    with proper naming convention and tags.
+    Compress a CSV file using lzop and upload it to S3 with appropriate metadata tags
     """
     try:
-        # Create compressed file path
-        compressed_file_path = file_path + '.lzo'
+        # Get the base filename without path
+        file_name = os.path.basename(file_path)
 
-        # Compress using lzop command-line tool
-        print(f"Compressing {file_path} to {compressed_file_path}...")
-        subprocess.run(["lzop", "-o", compressed_file_path, file_path], check=True)
+        # Create the compressed file name
+        compressed_file_path = f"{file_path}.lzo"
+
+        # Compress the file using lzop
+        print(f"Compressing {file_path}...")
+        compression_result = subprocess.run(['lzop', '-f', file_path, '-o', compressed_file_path],
+                                            capture_output=True, text=True)
+
+        if compression_result.returncode != 0:
+            print(f"Error compressing file: {compression_result.stderr}")
+            return
+
+        print(f"File compressed successfully to {compressed_file_path}")
 
         # Get current date and time for file path construction
         now = datetime.now()
@@ -86,31 +94,51 @@ def compress_and_upload_to_s3(file_path, ticker, source='polygon', asset_type='s
         hour = now.strftime('%H')
         datetime_str = now.strftime('%Y%m%d%H%M')
 
+        asset_type = metadata.get('asset_type', 'stocks')
+
+        # Get S3 bucket name from environment
+        s3_bucket = os.getenv("S3_BUCKET", "mochi-tickdata-historical")
+
         # Construct the S3 key (path)
         s3_key = f"{asset_type}/{ticker}/{source}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{datetime_str}.csv.lzo"
 
-        # Upload the file to S3
-        print(f"Uploading {compressed_file_path} to S3...")
-        s3_bucket = 'mochi-tickdata-historical'
+        # Build a comprehensive tag string from metadata
+        tag_parts = [
+            f"asset_type={asset_type}",
+            f"symbol={ticker}",
+            f"source={source}",
+            f"exchange={metadata.get('exchange', 'NASDAQ')}",
+            f"currency={metadata.get('currency', 'USD')}",
+            f"timeframe={timeframe}",
+            f"date={date_str}",
+            f"quality={quality}"
+        ]
+
+        # Add optional name tag if available
+        if 'name' in metadata:
+            tag_parts.append(f"name={metadata['name']}")
+
+        # Join all tags
+        tags = "&".join(tag_parts)
+
+        # Upload file to S3 with tags
+        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key}...")
         s3_client.upload_file(
             compressed_file_path,
             s3_bucket,
             s3_key,
             ExtraArgs={
-                'Tagging': f"asset_type={asset_type}&symbol={ticker}&source={source}&exchange={exchange}&"
-                           f"currency={currency}&timeframe={timeframe}&date={date_str}&quality={quality}"
+                'Tagging': tags
             }
         )
+        print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key}")
 
-        print(f"Successfully uploaded {ticker} data to s3://{s3_bucket}/{s3_key}")
-
-        # Clean up temporary compressed file
+        # Remove the compressed file after upload
         os.remove(compressed_file_path)
+        print(f"Removed temporary compressed file {compressed_file_path}")
 
-    except subprocess.CalledProcessError as e:
-        print(f"Error compressing file {file_path}: {e}")
     except Exception as e:
-        print(f"Error uploading {ticker} data to S3: {e}")
+        print(f"Error in compress_and_upload_to_s3: {e}")
 
 
 def get_tickers_from_args():
@@ -161,15 +189,68 @@ def main():
             compress_and_upload_to_s3(
                 output_filename,
                 ticker,
+                metadata=get_ticker_metadata(ticker),
                 source='polygon',
-                asset_type='stocks',
-                exchange='NASDAQ',  # You might want to get this from your data
-                currency='USD',
                 timeframe='1min',
                 quality='raw'
             )
         else:
             print(f"No data returned for {ticker}.")
+
+def get_ticker_metadata(ticker):
+    """
+    Fetch ticker metadata from Polygon API with comprehensive handling for different asset types
+    """
+
+    # Base metadata with defaults
+    metadata = {
+        'asset_type': 'stocks',
+        'exchange': 'NASDAQ',
+        'currency': 'USD',
+        'name': ticker,
+        'market': 'stocks'
+    }
+
+    try:
+        # Call the reference/tickers endpoint
+        ticker_details = client.get_ticker_details(ticker)
+
+
+        # Extract type (asset class)
+        if hasattr(ticker_details, 'type'):
+            asset_type = ticker_details.type.lower()
+            if asset_type in ['cs', 'common_stock']:
+                metadata['asset_type'] = 'stocks'
+            elif asset_type in ['etf']:
+                metadata['asset_type'] = 'etfs'
+            elif asset_type in ['crypto']:
+                metadata['asset_type'] = 'crypto'
+            elif asset_type in ['fx']:
+                metadata['asset_type'] = 'forex'
+            else:
+                metadata['asset_type'] = asset_type
+
+        # Extract exchange
+        if hasattr(ticker_details, 'primary_exchange'):
+            metadata['exchange'] = ticker_details.primary_exchange
+
+        # Extract currency
+        if hasattr(ticker_details, 'currency_name'):
+            metadata['currency'] = ticker_details.currency_name
+
+        # Extract name
+        if hasattr(ticker_details, 'name'):
+            metadata['name'] = ticker_details.name
+
+        # Extract market
+        if hasattr(ticker_details, 'market'):
+            metadata['market'] = ticker_details.market
+
+        return metadata
+    except Exception as e:
+        print(f"Error fetching metadata for {ticker}: {e}")
+        # Return default values if API call fails
+        return metadata
 
 
 if __name__ == "__main__":
