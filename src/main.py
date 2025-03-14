@@ -3,6 +3,7 @@ import time
 import pandas as pd
 import boto3
 import subprocess
+import argparse
 from datetime import datetime
 from dotenv import load_dotenv
 from polygon import RESTClient
@@ -112,10 +113,34 @@ def compress_and_upload_to_s3(file_path, ticker, source='polygon', asset_type='s
         print(f"Error uploading {ticker} data to S3: {e}")
 
 
+def get_tickers_from_args():
+    """
+    Parse command line arguments for tickers.
+    Returns a list of tickers if provided, otherwise None.
+    """
+    parser = argparse.ArgumentParser(description='Fetch, compress, and upload stock data to S3.')
+    parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
+    args = parser.parse_args()
+    return args.tickers
+
+
 def main():
-    # Load the CSV file containing the tickers.
-    tickers_df = pd.read_csv("tickers.csv")
-    tickers = tickers_df['ticker'].tolist()
+    # Check for command line arguments first
+    cmd_tickers = get_tickers_from_args()
+
+    if cmd_tickers:
+        print(f"Using tickers from command line arguments: {cmd_tickers}")
+        tickers = cmd_tickers
+    else:
+        # If no command line tickers, load from CSV file
+        print("No tickers provided via command line, loading from tickers.csv...")
+        try:
+            tickers_df = pd.read_csv("tickers.csv")
+            tickers = tickers_df['ticker'].tolist()
+            print(f"Loaded {len(tickers)} tickers from CSV file")
+        except Exception as e:
+            print(f"Error loading tickers from CSV: {e}")
+            return
 
     # Define the historical date range you want to query.
     from_date = "2023-03-15"
