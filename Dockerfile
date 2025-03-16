@@ -19,4 +19,4 @@ ENV PYTHONPATH="${PYTHONPATH}:/app"
 
 # Set the command to run your application.
 # Since runner.py is inside the src directory, adjust the path accordingly.
-ENTRYPOINT ["python", "src/main.py"]
+CMD ["python", "src/main.py"]
