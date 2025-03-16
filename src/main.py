@@ -97,7 +97,7 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, source='polygon', tim
         asset_type = metadata.get('asset_type', 'stocks')
 
         # Get S3 bucket name from environment
-        s3_bucket = os.getenv("S3_BUCKET", "mochi-tickdata-historical")
+        s3_bucket = os.getenv("S3_BUCKET", "mochi-prod-raw-historical-data")
 
         # Construct the S3 key (path)
         s3_key = f"{asset_type}/{ticker}/{source}/{timeframe}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{timeframe}_{datetime_str}.csv.lzo"
