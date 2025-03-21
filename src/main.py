@@ -63,7 +63,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     return None
 
 
-def compress_and_upload_to_s3(file_path, ticker, metadata, source='polygon', timeframe='1min', quality='raw'):
+def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='polygon', timeframe='1min', quality='raw'):
     """
     Compress a CSV file using lzop and upload it to S3 with appropriate metadata tags
     """
@@ -96,11 +96,11 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, source='polygon', tim
 
         asset_type = metadata.get('asset_type', 'stocks')
 
-        # Get S3 bucket name from environment
-        s3_bucket = os.getenv("OUTPUT_BUCKET_NAME", "mochi-prod-raw-historical-data")
 
-        # Construct the S3 key (path)
-        s3_key = f"{asset_type}/{ticker}/{source}/{timeframe}/{year}/{month}/{day}/{hour}/{ticker}_{source}_{timeframe}_{datetime_str}.csv.lzo"
+
+        s3_key = s3_path + f"/{ticker}_{source}_{timeframe}.csv.lzo"
+
+        s3_bucket = os.getenv("OUTPUT_BUCKET_NAME", "mochi-prod-raw-historical-data")
 
 
 # Build a comprehensive tag string from metadata
@@ -149,13 +149,14 @@ def get_tickers_from_args():
     """
     parser = argparse.ArgumentParser(description='Fetch, compress, and upload stock data to S3.')
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
+    parser.add_argument('--s3_path', required=True, help='Path in S3 where files will be uploaded')
     args = parser.parse_args()
-    return args.tickers
+    return args.tickers, args.s3_path
 
 
 def main():
     # Check for command line arguments first
-    cmd_tickers = get_tickers_from_args()
+    cmd_tickers, s3_path = get_tickers_from_args()
 
     if cmd_tickers:
         print(f"Using tickers from command line arguments: {cmd_tickers}")
@@ -209,7 +210,8 @@ def main():
                     metadata=ticker_metadata,
                     source='polygon',
                     timeframe=tf['label'],
-                    quality='raw'
+                    quality='raw',
+                    s3_path=s3_path
                 )
             else:
                 print(f"No {tf['label']} data returned for {ticker}.")
