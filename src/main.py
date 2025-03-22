@@ -122,7 +122,7 @@ def get_tickers_from_args():
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
     parser.add_argument('--s3_key_min', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--s3_key_hour', required=True, help='Path in S3 where files will be uploaded')
-    parser.add_argument('--s3_key_hour', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_day', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--from_date', required=True, help='Start date in format YYYY-MM-DD')
     parser.add_argument('--to_date', required=True, help='End date in format YYYY-MM-DD')
     args = parser.parse_args()
