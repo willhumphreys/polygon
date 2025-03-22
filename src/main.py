@@ -120,9 +120,9 @@ def get_tickers_from_args():
     """
     parser = argparse.ArgumentParser(description='Fetch, compress, and upload stock data to S3.')
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
-    parser.add_argument('--s3_key_1min', required=True, help='Path in S3 where files will be uploaded')
-    parser.add_argument('--s3_key_1hour', required=True, help='Path in S3 where files will be uploaded')
-    parser.add_argument('--s3_key_1day', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_min', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_hour', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_day', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--from_date', required=True, help='Start date in format YYYY-MM-DD')
     parser.add_argument('--to_date', required=True, help='End date in format YYYY-MM-DD')
     args = parser.parse_args()
@@ -155,7 +155,7 @@ def main():
         fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'day')
 
 
-def fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
+def fetch_from_polygon(from_date, s3_key_min, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
     data = get_historical_data(ticker, from_date, to_date, multiplier, timespan)
     if data:
         # Convert the list of Agg objects or dict results to a pandas DataFrame.
@@ -165,7 +165,7 @@ def fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date,
         print(f"Saved data for {ticker} to {output_filename}")
 
         # Compress and upload the file to S3
-        compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key_1min=s3_key_1min)
+        compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key_1min=s3_key_min)
     else:
         throws = f"No data returned for {ticker}."
 
