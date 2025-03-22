@@ -27,14 +27,15 @@ s3_client = boto3.client('s3')
 
 
 def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute', max_retries=3):
-    """
-    Fetch historical aggregates (bars) data for the given ticker between from_date and to_date.
-    Handles responses that might be either a dict (with a "results" key) or a list of Agg objects.
-    If a 429 error (rate limit) is encountered, the function will wait before retrying.
-    """
     attempts = 0
+    endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"  # Log the endpoint pattern
+    # endpoint = f"v2/aggs/ticker/AAPL/range/1/minute/2023-03-15/2023-03-20"  # Log the endpoint pattern
+
+
+
     while attempts < max_retries:
         try:
+            print(f"Calling endpoint: {endpoint}")  # Log the endpoint being called
             response = client.get_aggs(ticker, multiplier, timespan, from_date, to_date)
 
             # If the response is a list, return it directly.
@@ -53,14 +54,17 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
             error_str = str(e)
             if "429" in error_str:
                 wait_time = 60  # wait time in seconds
-                print(f"Rate limit hit for {ticker}. Waiting {wait_time} seconds before retrying...")
+                print(
+                    f"Rate limit hit for {ticker} at endpoint {endpoint}. Waiting {wait_time} seconds before retrying...")
                 time.sleep(wait_time)
                 attempts += 1
             else:
-                print(f"Error fetching data for {ticker}: {e}")
-                return None
-    print(f"Exceeded maximum retries for {ticker}.")
-    return None
+                print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+                # Throw an error by raising an exception
+                raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
+
+    print(f"Exceeded maximum retries for {ticker} at endpoint {endpoint}.")
+    raise RuntimeError(f"Exceeded maximum retries ({max_retries}) for {ticker}")
 
 
 def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='polygon', timeframe='1min', quality='raw'):
@@ -150,13 +154,15 @@ def get_tickers_from_args():
     parser = argparse.ArgumentParser(description='Fetch, compress, and upload stock data to S3.')
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
     parser.add_argument('--s3_path', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--from_date', required=True, help='Start date in format YYYY-MM-DD')
+    parser.add_argument('--to_date', required=True, help='End date in format YYYY-MM-DD')
     args = parser.parse_args()
-    return args.tickers, args.s3_path
+    return args.tickers, args.s3_path, args.from_date, args.to_date
 
 
 def main():
     # Check for command line arguments first
-    cmd_tickers, s3_path = get_tickers_from_args()
+    cmd_tickers, s3_path, from_date, to_date = get_tickers_from_args()
 
     if cmd_tickers:
         print(f"Using tickers from command line arguments: {cmd_tickers}")
@@ -171,10 +177,6 @@ def main():
         except Exception as e:
             print(f"Error loading tickers from CSV: {e}")
             return
-
-    # Define the historical date range you want to query.
-    from_date = "2023-03-15"
-    to_date = "2023-03-20"
 
     # Define the timeframes to fetch
     timeframes = [
