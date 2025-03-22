@@ -65,7 +65,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     raise RuntimeError(f"Exceeded maximum retries ({max_retries}) for {ticker}")
 
 
-def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key_1min, source='polygon', timeframe='1min',
+def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polygon', timeframe='1min',
                               quality='raw'):
     """
     Compress a CSV file using lzop and upload it to S3 with appropriate metadata tags
@@ -101,9 +101,9 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key_1min, source='
         tags = "&".join(tag_parts)
 
         # Upload file to S3 with tags
-        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key_1min}...")
-        s3_client.upload_file(compressed_file_path, s3_bucket, s3_key_1min, ExtraArgs={'Tagging': tags})
-        print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key_1min}")
+        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key}...")
+        s3_client.upload_file(compressed_file_path, s3_bucket, s3_key, ExtraArgs={'Tagging': tags})
+        print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key}")
 
         # Remove the compressed file after upload
         os.remove(compressed_file_path)
@@ -122,16 +122,16 @@ def get_tickers_from_args():
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
     parser.add_argument('--s3_key_min', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--s3_key_hour', required=True, help='Path in S3 where files will be uploaded')
-    parser.add_argument('--s3_key_day', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_hour', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--from_date', required=True, help='Start date in format YYYY-MM-DD')
     parser.add_argument('--to_date', required=True, help='End date in format YYYY-MM-DD')
     args = parser.parse_args()
-    return args.tickers, args.s3_path, args.from_date, args.to_date
+    return args.tickers, args.s3_key_min, args.s3_key_hour, args.s3_key_day, args.from_date, args.to_date
 
 
 def main():
     # Check for command line arguments first
-    cmd_tickers, s3_key_1min, from_date, to_date = get_tickers_from_args()
+    cmd_tickers, s3_key_1min, s3_key_1hour, s3_key_1day, from_date, to_date = get_tickers_from_args()
 
     if cmd_tickers:
         print(f"Using tickers from command line arguments: {cmd_tickers}")
@@ -151,11 +151,11 @@ def main():
         ticker_metadata = get_ticker_metadata(ticker)
 
         fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'minute')
-        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'hour')
-        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'day')
+        fetch_from_polygon(from_date, s3_key_1hour, ticker, ticker_metadata, to_date, 1, 'hour')
+        fetch_from_polygon(from_date, s3_key_1day, ticker, ticker_metadata, to_date, 1, 'day')
 
 
-def fetch_from_polygon(from_date, s3_key_min, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
+def fetch_from_polygon(from_date, s3_key, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
     data = get_historical_data(ticker, from_date, to_date, multiplier, timespan)
     if data:
         # Convert the list of Agg objects or dict results to a pandas DataFrame.
@@ -165,7 +165,7 @@ def fetch_from_polygon(from_date, s3_key_min, ticker, ticker_metadata, to_date, 
         print(f"Saved data for {ticker} to {output_filename}")
 
         # Compress and upload the file to S3
-        compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key_1min=s3_key_min)
+        compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key=s3_key)
     else:
         throws = f"No data returned for {ticker}."
 
