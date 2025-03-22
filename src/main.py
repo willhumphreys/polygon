@@ -1,10 +1,10 @@
-import os
-import time
-import pandas as pd
-import boto3
-import subprocess
 import argparse
-from datetime import datetime
+import os
+import subprocess
+import time
+
+import boto3
+import pandas as pd
 from dotenv import load_dotenv
 from polygon import RESTClient
 
@@ -30,8 +30,6 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     attempts = 0
     endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"  # Log the endpoint pattern
     # endpoint = f"v2/aggs/ticker/AAPL/range/1/minute/2023-03-15/2023-03-20"  # Log the endpoint pattern
-
-
 
     while attempts < max_retries:
         try:
@@ -67,7 +65,8 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     raise RuntimeError(f"Exceeded maximum retries ({max_retries}) for {ticker}")
 
 
-def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='polygon', timeframe='1min', quality='raw'):
+def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key_1min, source='polygon', timeframe='1min',
+                              quality='raw'):
     """
     Compress a CSV file using lzop and upload it to S3 with appropriate metadata tags
     """
@@ -80,8 +79,8 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='poly
 
         # Compress the file using lzop
         print(f"Compressing {file_path}...")
-        compression_result = subprocess.run(['lzop', '-f', file_path, '-o', compressed_file_path],
-                                            capture_output=True, text=True)
+        compression_result = subprocess.run(['lzop', '-f', file_path, '-o', compressed_file_path], capture_output=True,
+                                            text=True)
 
         if compression_result.returncode != 0:
             print(f"Error compressing file: {compression_result.stderr}")
@@ -89,35 +88,10 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='poly
 
         print(f"File compressed successfully to {compressed_file_path}")
 
-        # Get current date and time for file path construction
-        now = datetime.now()
-        date_str = now.strftime('%Y-%m-%d')
-        year = now.strftime('%Y')
-        month = now.strftime('%m')
-        day = now.strftime('%d')
-        hour = now.strftime('%H')
-        datetime_str = now.strftime('%Y%m%d%H%M')
-
-        asset_type = metadata.get('asset_type', 'stocks')
-
-
-
-        s3_key = s3_path + f"/{ticker}_{source}_{timeframe}.csv.lzo"
-
         s3_bucket = os.getenv("OUTPUT_BUCKET_NAME", "mochi-prod-raw-historical-data")
 
-
-# Build a comprehensive tag string from metadata
-        tag_parts = [
-            f"asset_type={asset_type}",
-            f"symbol={ticker}",
-            f"source={source}",
-            f"exchange={metadata.get('exchange', 'NASDAQ')}",
-            f"currency={metadata.get('currency', 'USD')}",
-            f"timeframe={timeframe}",
-            f"date={date_str}",
-            f"quality={quality}"
-        ]
+        # Build a comprehensive tag string from metadata
+        tag_parts = [f"symbol={ticker}", f"source={source}", f"timeframe={timeframe}", f"quality={quality}"]
 
         # Add optional name tag if available
         if 'name' in metadata:
@@ -127,16 +101,9 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_path, source='poly
         tags = "&".join(tag_parts)
 
         # Upload file to S3 with tags
-        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key}...")
-        s3_client.upload_file(
-            compressed_file_path,
-            s3_bucket,
-            s3_key,
-            ExtraArgs={
-                'Tagging': tags
-            }
-        )
-        print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key}")
+        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key_1min}...")
+        s3_client.upload_file(compressed_file_path, s3_bucket, s3_key_1min, ExtraArgs={'Tagging': tags})
+        print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key_1min}")
 
         # Remove the compressed file after upload
         os.remove(compressed_file_path)
@@ -153,7 +120,9 @@ def get_tickers_from_args():
     """
     parser = argparse.ArgumentParser(description='Fetch, compress, and upload stock data to S3.')
     parser.add_argument('--tickers', nargs='+', help='List of ticker symbols to process')
-    parser.add_argument('--s3_path', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_1min', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_1hour', required=True, help='Path in S3 where files will be uploaded')
+    parser.add_argument('--s3_key_1day', required=True, help='Path in S3 where files will be uploaded')
     parser.add_argument('--from_date', required=True, help='Start date in format YYYY-MM-DD')
     parser.add_argument('--to_date', required=True, help='End date in format YYYY-MM-DD')
     args = parser.parse_args()
@@ -162,7 +131,7 @@ def get_tickers_from_args():
 
 def main():
     # Check for command line arguments first
-    cmd_tickers, s3_path, from_date, to_date = get_tickers_from_args()
+    cmd_tickers, s3_key_1min, from_date, to_date = get_tickers_from_args()
 
     if cmd_tickers:
         print(f"Using tickers from command line arguments: {cmd_tickers}")
@@ -178,46 +147,27 @@ def main():
             print(f"Error loading tickers from CSV: {e}")
             return
 
-    # Define the timeframes to fetch
-    timeframes = [
-        {'multiplier': 1, 'timespan': 'minute', 'label': '1min'},
-        {'multiplier': 1, 'timespan': 'hour', 'label': '1hour'},
-        {'multiplier': 1, 'timespan': 'day', 'label': '1day'}
-    ]
-
     for ticker in tickers:
         ticker_metadata = get_ticker_metadata(ticker)
 
-        for tf in timeframes:
-            print(f"Fetching {tf['label']} data for {ticker}...")
-            data = get_historical_data(
-                ticker,
-                from_date,
-                to_date,
-                multiplier=tf['multiplier'],
-                timespan=tf['timespan']
-            )
+        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'minute')
+        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'hour')
+        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'day')
 
-            if data:
-                # Convert the list of Agg objects or dict results to a pandas DataFrame.
-                df = pd.DataFrame(data)
-                output_filename = os.path.join(output_dir, f"{ticker}_{tf['label']}_historical.csv")
-                df.to_csv(output_filename, index=False)
-                print(f"Saved {tf['label']} data for {ticker} to {output_filename}")
 
-                # Compress and upload the file to S3
-                compress_and_upload_to_s3(
-                    output_filename,
-                    ticker,
-                    metadata=ticker_metadata,
-                    source='polygon',
-                    timeframe=tf['label'],
-                    quality='raw',
-                    s3_path=s3_path
-                )
-            else:
-                print(f"No {tf['label']} data returned for {ticker}.")
+def fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
+    data = get_historical_data(ticker, from_date, to_date, multiplier, timespan)
+    if data:
+        # Convert the list of Agg objects or dict results to a pandas DataFrame.
+        df = pd.DataFrame(data)
+        output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
+        df.to_csv(output_filename, index=False)
+        print(f"Saved data for {ticker} to {output_filename}")
 
+        # Compress and upload the file to S3
+        compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key_1min=s3_key_1min)
+    else:
+        throws = f"No data returned for {ticker}."
 
 def get_ticker_metadata(ticker):
     """
@@ -225,18 +175,11 @@ def get_ticker_metadata(ticker):
     """
 
     # Base metadata with defaults
-    metadata = {
-        'asset_type': 'stocks',
-        'exchange': 'NASDAQ',
-        'currency': 'USD',
-        'name': ticker,
-        'market': 'stocks'
-    }
+    metadata = {'asset_type': 'stocks', 'exchange': 'NASDAQ', 'currency': 'USD', 'name': ticker, 'market': 'stocks'}
 
     try:
         # Call the reference/tickers endpoint
         ticker_details = client.get_ticker_details(ticker)
-
 
         # Extract type (asset class)
         if hasattr(ticker_details, 'type'):
