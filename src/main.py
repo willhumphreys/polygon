@@ -2,7 +2,8 @@ import argparse
 import os
 import subprocess
 import time
-import json
+from datetime import datetime
+
 import boto3
 import pandas as pd
 from dotenv import load_dotenv
@@ -27,57 +28,100 @@ s3_client = boto3.client('s3')
 
 
 def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute'):
-    endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
+    """
+    Fetches historical data from Polygon.io in one-month chunks.
+
+    Args:
+        ticker: The ticker symbol
+        from_date: Start date in YYYY-MM-DD format
+        to_date: End date in YYYY-MM-DD format
+        multiplier: Time multiplier for the timespan
+        timespan: Time span for the aggregation (minute, hour, day, etc.)
+
+    Returns:
+        Path to the CSV file containing the data
+    """
     output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
-    row_count = 0
-    log_interval = 5000  # Log every 5000 records
+    total_rows = 0
 
-    try:
-        print(f"Calling endpoint: {endpoint}")
+    # Convert string dates to datetime for easier manipulation
+    start_dt = datetime.strptime(from_date, '%Y-%m-%d')
+    end_dt = datetime.strptime(to_date, '%Y-%m-%d')
 
-        # Create the CSV file
-        with open(output_filename, 'w') as f:
-            pass
+    # Create an empty CSV file
+    with open(output_filename, 'w') as f:
+        pass
 
-        # Process data and write directly to CSV as we receive it
-        first_record = True
+    first_chunk = True
 
-        for a in client.list_aggs(
-                ticker,
-                multiplier,
-                timespan,
-                from_date,
-                to_date,
-                limit=50000,  # Max results per page
-        ):
-            # Convert the single aggregation to a DataFrame and write immediately
-            df = pd.DataFrame([a])
-            df.to_csv(output_filename, mode='a', header=first_record, index=False)
-
-            if first_record:
-                first_record = False
-
-            row_count += 1
-
-            # Log progress at intervals
-            if row_count % log_interval == 0:
-                print(f"Processing {ticker}: {row_count} records retrieved...")
-
-        if row_count > 0:
-            print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
-            return output_filename  # Return the filename instead of the data
+    # Process one month at a time
+    current_start = start_dt
+    while current_start < end_dt:
+        # Calculate end of current chunk (one month later or end_dt, whichever comes first)
+        if current_start.month == 12:
+            current_end = min(datetime(current_start.year + 1, 1, current_start.day), end_dt)
         else:
-            print(f"No data returned for {ticker}.")
-            return None
+            current_end = min(datetime(current_start.year, current_start.month + 1, current_start.day), end_dt)
 
-    except Exception as e:
-        error_str = str(e)
-        if "429" in error_str:
-            print(f"Rate limit hit for {ticker} at endpoint {endpoint}.")
-            raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
-        else:
-            print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
-            raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
+        # Format dates for API call
+        current_start_str = current_start.strftime('%Y-%m-%d')
+        current_end_str = current_end.strftime('%Y-%m-%d')
+
+        endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{current_start_str}/{current_end_str}"
+        chunk_rows = 0
+        log_interval = 5000
+
+        try:
+            print(f"Fetching {ticker} data from {current_start_str} to {current_end_str}")
+
+            # Collect data for this chunk
+            chunk_data = []
+
+            for a in client.list_aggs(
+                    ticker,
+                    multiplier,
+                    timespan,
+                    current_start_str,
+                    current_end_str,
+                    limit=50000,
+            ):
+                chunk_data.append(a)
+                chunk_rows += 1
+                total_rows += 1
+
+                # Log progress
+                if total_rows % log_interval == 0:
+                    print(f"Processing {ticker}: {total_rows} records retrieved...")
+
+            # Write chunk to CSV
+            if chunk_data:
+                df = pd.DataFrame(chunk_data)
+                df.to_csv(output_filename, mode='a', header=first_chunk, index=False)
+                first_chunk = False
+
+            print(f"Retrieved {chunk_rows} records for {ticker} from {current_start_str} to {current_end_str}")
+
+            # Move to next month
+            current_start = current_end
+
+            # Add a small delay to avoid hitting rate limits
+            time.sleep(0.5)
+
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str:
+                print(f"Rate limit hit for {ticker} at endpoint {endpoint}.")
+                raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
+            else:
+                print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+                raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
+
+    if total_rows > 0:
+        print(f"Retrieved and saved a total of {total_rows} results for {ticker} from {from_date} to {to_date}")
+        return output_filename
+    else:
+        print(f"No data returned for {ticker}.")
+        return None
 
 
 def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polygon', timeframe='1min',
@@ -171,18 +215,13 @@ def main():
 
 
 def fetch_from_polygon(from_date, s3_key, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
-    data = get_historical_data(ticker, from_date, to_date, multiplier, timespan)
-    if data:
-        # Convert the list of Agg objects or dict results to a pandas DataFrame.
-        df = pd.DataFrame(data)
-        output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
-        df.to_csv(output_filename, index=False)
-        print(f"Saved data for {ticker} to {output_filename}")
-
+    output_filename = get_historical_data(ticker, from_date, to_date, multiplier, timespan)
+    if output_filename:
         # Compress and upload the file to S3
         compress_and_upload_to_s3(output_filename, ticker, metadata=ticker_metadata, source='polygon', s3_key=s3_key)
     else:
-        throws = f"No data returned for {ticker}."
+        print(f"No data returned for {ticker}.")
+
 
 def get_ticker_metadata(ticker):
     """
