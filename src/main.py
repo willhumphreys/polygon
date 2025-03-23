@@ -2,7 +2,7 @@ import argparse
 import os
 import subprocess
 import time
-
+import json
 import boto3
 import pandas as pd
 from dotenv import load_dotenv
@@ -26,43 +26,58 @@ client = RESTClient(api_key)
 s3_client = boto3.client('s3')
 
 
-def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute', max_retries=3):
-    attempts = 0
-    endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"  # Log the endpoint pattern
-    # endpoint = f"v2/aggs/ticker/AAPL/range/1/minute/2023-03-15/2023-03-20"  # Log the endpoint pattern
+def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute'):
+    endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
+    output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
+    row_count = 0
+    log_interval = 5000  # Log every 5000 records
 
-    while attempts < max_retries:
-        try:
-            print(f"Calling endpoint: {endpoint}")  # Log the endpoint being called
-            response = client.get_aggs(ticker, multiplier, timespan, from_date, to_date)
+    try:
+        print(f"Calling endpoint: {endpoint}")
 
-            # If the response is a list, return it directly.
-            if isinstance(response, list):
-                return response
+        # Create the CSV file
+        with open(output_filename, 'w') as f:
+            pass
 
-            # If the response is a dictionary with a "results" key, return the contents.
-            elif isinstance(response, dict) and "results" in response:
-                return response["results"]
+        # Process data and write directly to CSV as we receive it
+        first_record = True
 
-            else:
-                print(f"No data returned for {ticker}. Response: {response}")
-                return None
+        for a in client.list_aggs(
+                ticker,
+                multiplier,
+                timespan,
+                from_date,
+                to_date,
+                limit=50000,  # Max results per page
+        ):
+            # Convert the single aggregation to a DataFrame and write immediately
+            df = pd.DataFrame([a])
+            df.to_csv(output_filename, mode='a', header=first_record, index=False)
 
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str:
-                wait_time = 60  # wait time in seconds
-                print(
-                    f"Rate limit hit for {ticker} at endpoint {endpoint}. Waiting {wait_time} seconds before retrying...")
-                time.sleep(wait_time)
-                attempts += 1
-            else:
-                print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
-                # Throw an error by raising an exception
-                raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
+            if first_record:
+                first_record = False
 
-    print(f"Exceeded maximum retries for {ticker} at endpoint {endpoint}.")
-    raise RuntimeError(f"Exceeded maximum retries ({max_retries}) for {ticker}")
+            row_count += 1
+
+            # Log progress at intervals
+            if row_count % log_interval == 0:
+                print(f"Processing {ticker}: {row_count} records retrieved...")
+
+        if row_count > 0:
+            print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
+            return output_filename  # Return the filename instead of the data
+        else:
+            print(f"No data returned for {ticker}.")
+            return None
+
+    except Exception as e:
+        error_str = str(e)
+        if "429" in error_str:
+            print(f"Rate limit hit for {ticker} at endpoint {endpoint}.")
+            raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
+        else:
+            print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+            raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
 
 
 def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polygon', timeframe='1min',
