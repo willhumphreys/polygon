@@ -74,7 +74,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
         # Retry logic with exponential backoff
         max_retries = 10
         retry_count = 0
-        backoff_time = 5  # Start with 5 seconds
+        backoff_time = 20  # Start with 5 seconds
 
         while retry_count <= max_retries:
             try:
