@@ -29,7 +29,7 @@ s3_client = boto3.client('s3')
 
 def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute'):
     """
-    Fetches historical data from Polygon.io in one-month chunks.
+    Fetches historical data from Polygon.io in one-month chunks with retry logic.
 
     Args:
         ticker: The ticker symbol
@@ -71,50 +71,70 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
         chunk_rows = 0
         log_interval = 5000
 
-        try:
-            print(f"Fetching {ticker} data from {current_start_str} to {current_end_str}")
+        # Retry logic with exponential backoff
+        max_retries = 10
+        retry_count = 0
+        backoff_time = 5  # Start with 5 seconds
 
-            # Collect data for this chunk
-            chunk_data = []
+        while retry_count <= max_retries:
+            try:
+                if retry_count > 0:
+                    print(f"Retry attempt {retry_count} for {ticker} from {current_start_str} to {current_end_str}")
+                else:
+                    print(f"Fetching {ticker} data from {current_start_str} to {current_end_str}")
 
-            for a in client.list_aggs(
-                    ticker,
-                    multiplier,
-                    timespan,
-                    current_start_str,
-                    current_end_str,
-                    limit=50000,
-            ):
-                chunk_data.append(a)
-                chunk_rows += 1
-                total_rows += 1
+                # Collect data for this chunk
+                chunk_data = []
 
-                # Log progress
-                if total_rows % log_interval == 0:
-                    print(f"Processing {ticker}: {total_rows} records retrieved...")
+                for a in client.list_aggs(
+                        ticker,
+                        multiplier,
+                        timespan,
+                        current_start_str,
+                        current_end_str,
+                        limit=50000,
+                ):
+                    chunk_data.append(a)
+                    chunk_rows += 1
+                    total_rows += 1
 
-            # Write chunk to CSV
-            if chunk_data:
-                df = pd.DataFrame(chunk_data)
-                df.to_csv(output_filename, mode='a', header=first_chunk, index=False)
-                first_chunk = False
+                    # Log progress
+                    if total_rows % log_interval == 0:
+                        print(f"Processing {ticker}: {total_rows} records retrieved...")
 
-            print(f"Retrieved {chunk_rows} records for {ticker} from {current_start_str} to {current_end_str}")
+                # Write chunk to CSV
+                if chunk_data:
+                    df = pd.DataFrame(chunk_data)
+                    df.to_csv(output_filename, mode='a', header=first_chunk, index=False)
+                    first_chunk = False
 
-            # Move to next month
-            current_start = current_end
+                print(f"Retrieved {chunk_rows} records for {ticker} from {current_start_str} to {current_end_str}")
 
-            # Add a small delay to avoid hitting rate limits
-            time.sleep(0.5)
+                # Move to next month
+                current_start = current_end
 
-        except Exception as e:
-            error_str = str(e)
-            if "429" in error_str:
-                print(f"Rate limit hit for {ticker} at endpoint {endpoint}.")
-                raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
-            else:
-                print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
-                raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
+                # Add a small delay to avoid hitting rate limits
+                time.sleep(1)
+
+                # Success, break out of retry loop
+                break
+
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        print(f"Maximum retry attempts reached for {ticker} at endpoint {endpoint}.")
+                        raise RuntimeError(f"Rate limit hit for {ticker}. Maximum retries exceeded.")
+
+                    # Exponential backoff
+                    wait_time = backoff_time * (2 ** (retry_count - 1))
+                    print(
+                        f"Rate limit hit for {ticker} at endpoint {endpoint}. Waiting {wait_time} seconds before retry...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+                    raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
 
     if total_rows > 0:
         print(f"Retrieved and saved a total of {total_rows} results for {ticker} from {from_date} to {to_date}")
