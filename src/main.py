@@ -66,7 +66,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
             return output_filename  # Return the filename instead of the data
         else:
             print(f"No data returned for {ticker}.")
-            return None
+            raise RuntimeError(f"No data returned for {ticker}.")
 
     except Exception as e:
         error_str = str(e)
@@ -96,8 +96,7 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polyg
                                             text=True)
 
         if compression_result.returncode != 0:
-            print(f"Error compressing file: {compression_result.stderr}")
-            return
+            raise RuntimeError(f"Error compressing file: {compression_result.stderr}")
 
         print(f"File compressed successfully to {compressed_file_path}")
 
@@ -114,7 +113,7 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polyg
         tags = "&".join(tag_parts)
 
         # Upload file to S3 with tags
-        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key}...")
+        print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key} with tags: {tags}")
         s3_client.upload_file(compressed_file_path, s3_bucket, s3_key, ExtraArgs={'Tagging': tags})
         print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key}")
 
@@ -123,7 +122,7 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polyg
         print(f"Removed temporary compressed file {compressed_file_path}")
 
     except Exception as e:
-        print(f"Error in compress_and_upload_to_s3: {e}")
+        raise RuntimeError(f"Error in compress_and_upload_to_s3: {e}")
 
 
 def get_tickers_from_args():
