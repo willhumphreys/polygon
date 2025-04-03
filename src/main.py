@@ -114,7 +114,7 @@ def compress_and_upload_to_s3(file_path, ticker, metadata, s3_key, source='polyg
 
         # Upload file to S3 with tags
         print(f"Uploading {compressed_file_path} to S3 bucket {s3_bucket} at {s3_key} with tags: {tags}")
-        s3_client.upload_file(compressed_file_path, s3_bucket, s3_key, ExtraArgs={'Tagging': tags})
+        s3_client.upload_file(compressed_file_path, s3_bucket, s3_key)
         print(f"File uploaded successfully to S3: s3://{s3_bucket}/{s3_key}")
 
         # Remove the compressed file after upload
