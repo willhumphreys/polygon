@@ -5,6 +5,8 @@ import boto3
 import pandas as pd
 from dotenv import load_dotenv
 from polygon import RESTClient
+import time
+import random
 
 # Load environment variables from .env file
 load_dotenv()
@@ -40,26 +42,50 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
         # Process data and write directly to CSV as we receive it
         first_record = True
 
-        for a in client.list_aggs(
-                ticker,
-                multiplier,
-                timespan,
-                from_date,
-                to_date,
-                limit=50000,  # Max results per page
-        ):
-            # Convert the single aggregation to a DataFrame and write immediately
-            df = pd.DataFrame([a])
-            df.to_csv(output_filename, mode='a', header=first_record, index=False)
+        # Parameters for exponential backoff
+        max_retries = 5
+        base_wait_time = 15  # Start with 15 seconds
 
-            if first_record:
-                first_record = False
+        retry_count = 0
+        while True:
+            try:
+                for a in client.list_aggs(
+                        ticker,
+                        multiplier,
+                        timespan,
+                        from_date,
+                        to_date,
+                        limit=50000,  # Max results per page
+                ):
+                    # Convert the single aggregation to a DataFrame and write immediately
+                    df = pd.DataFrame([a])
+                    df.to_csv(output_filename, mode='a', header=first_record, index=False)
 
-            row_count += 1
+                    if first_record:
+                        first_record = False
 
-            # Log progress at intervals
-            if row_count % log_interval == 0:
-                print(f"Processing {ticker}: {row_count} records retrieved...")
+                    row_count += 1
+
+                    # Log progress at intervals
+                    if row_count % log_interval == 0:
+                        print(f"Processing {ticker}: {row_count} records retrieved...")
+
+                # If we got here without exception, we're done
+                break
+
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str and retry_count < max_retries:
+                    retry_count += 1
+                    # Calculate wait time with exponential backoff and jitter
+                    wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
+                    print(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
+                    print(f"Backing off for {wait_time:.2f} seconds...")
+                    time.sleep(wait_time)
+                    print(f"Resuming data fetch for {ticker}...")
+                else:
+                    # Re-raise if it's not a 429 error or we've exceeded max retries
+                    raise
 
         if row_count > 0:
             print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
@@ -71,7 +97,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     except Exception as e:
         error_str = str(e)
         if "429" in error_str:
-            print(f"Rate limit hit for {ticker} at endpoint {endpoint}.")
+            print(f"Rate limit hit for {ticker} at endpoint {endpoint} after {max_retries} retries.")
             raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
         else:
             print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
