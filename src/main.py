@@ -1,6 +1,8 @@
 import argparse
 import os
 import subprocess
+from datetime import datetime
+
 import boto3
 import pandas as pd
 from dotenv import load_dotenv
@@ -32,8 +34,13 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
     row_count = 0
     log_interval = 5000  # Log every 5000 records
 
+    def log_with_timestamp(message):
+        """Helper function to log messages with current timestamp"""
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        print(f"[{current_time}] {message}")
+
     try:
-        print(f"Calling endpoint: {endpoint}")
+        log_with_timestamp(f"Calling endpoint: {endpoint}")
 
         # Create the CSV file
         with open(output_filename, 'w') as f:
@@ -47,6 +54,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
         base_wait_time = 15  # Start with 15 seconds
 
         retry_count = 0
+
         while True:
             try:
                 for a in client.list_aggs(
@@ -68,7 +76,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
 
                     # Log progress at intervals
                     if row_count % log_interval == 0:
-                        print(f"Processing {ticker}: {row_count} records retrieved...")
+                        log_with_timestamp(f"Processing {ticker}: {row_count} records retrieved...")
 
                 # If we got here without exception, we're done
                 break
@@ -79,28 +87,35 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
                     retry_count += 1
                     # Calculate wait time with exponential backoff and jitter
                     wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
-                    print(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
-                    print(f"Backing off for {wait_time:.2f} seconds...")
+                    log_with_timestamp(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
+                    log_with_timestamp(f"Backing off for {wait_time:.2f} seconds...")
+
+                    # Force flush stdout to ensure logs are written before sleep
+                    import sys
+                    sys.stdout.flush()
+
+                    # Actually sleep for the calculated time
                     time.sleep(wait_time)
-                    print(f"Resuming data fetch for {ticker}...")
+
+                    log_with_timestamp(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff...")
                 else:
                     # Re-raise if it's not a 429 error or we've exceeded max retries
                     raise
 
         if row_count > 0:
-            print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
+            log_with_timestamp(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
             return output_filename  # Return the filename instead of the data
         else:
-            print(f"No data returned for {ticker}.")
+            log_with_timestamp(f"No data returned for {ticker}.")
             raise RuntimeError(f"No data returned for {ticker}.")
 
     except Exception as e:
         error_str = str(e)
         if "429" in error_str:
-            print(f"Rate limit hit for {ticker} at endpoint {endpoint} after {max_retries} retries.")
+            log_with_timestamp(f"Rate limit hit for {ticker} at endpoint {endpoint} after {max_retries} retries.")
             raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
         else:
-            print(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+            log_with_timestamp(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
             raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
 
 
