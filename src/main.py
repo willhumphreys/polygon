@@ -1,14 +1,11 @@
 import argparse
 import os
 import subprocess
-from datetime import datetime
-
 import boto3
 import pandas as pd
 from dotenv import load_dotenv
 from polygon import RESTClient
-import time
-import random
+
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,19 +25,32 @@ client = RESTClient(api_key)
 s3_client = boto3.client('s3')
 
 
+import time
+import random
+import datetime
+import sys
+import logging
+
+# Configure logging for synchronized output
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s.%(msecs)03d - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger('polygon_data_fetcher')
+
+
 def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minute'):
     endpoint = f"aggs/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
     output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
     row_count = 0
     log_interval = 5000  # Log every 5000 records
 
-    def log_with_timestamp(message):
-        """Helper function to log messages with current timestamp"""
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        print(f"[{current_time}] {message}")
-
     try:
-        log_with_timestamp(f"Calling endpoint: {endpoint}")
+        logger.info(f"Calling endpoint: {endpoint}")
 
         # Create the CSV file
         with open(output_filename, 'w') as f:
@@ -54,6 +64,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
         base_wait_time = 15  # Start with 15 seconds
 
         retry_count = 0
+        data_fetch_started = False
 
         while True:
             try:
@@ -65,6 +76,10 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
                         to_date,
                         limit=50000,  # Max results per page
                 ):
+                    # Mark that we've started fetching data
+                    if not data_fetch_started:
+                        data_fetch_started = True
+
                     # Convert the single aggregation to a DataFrame and write immediately
                     df = pd.DataFrame([a])
                     df.to_csv(output_filename, mode='a', header=first_record, index=False)
@@ -76,7 +91,7 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
 
                     # Log progress at intervals
                     if row_count % log_interval == 0:
-                        log_with_timestamp(f"Processing {ticker}: {row_count} records retrieved...")
+                        logger.info(f"Processing {ticker}: {row_count} records retrieved...")
 
                 # If we got here without exception, we're done
                 break
@@ -87,35 +102,42 @@ def get_historical_data(ticker, from_date, to_date, multiplier=1, timespan='minu
                     retry_count += 1
                     # Calculate wait time with exponential backoff and jitter
                     wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
-                    log_with_timestamp(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
-                    log_with_timestamp(f"Backing off for {wait_time:.2f} seconds...")
 
-                    # Force flush stdout to ensure logs are written before sleep
-                    import sys
-                    sys.stdout.flush()
+                    logger.info(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
+                    logger.info(f"Backing off for {wait_time:.2f} seconds...")
+
+                    # Force flush all handlers to ensure logs are written
+                    for handler in logger.handlers:
+                        handler.flush()
 
                     # Actually sleep for the calculated time
                     time.sleep(wait_time)
 
-                    log_with_timestamp(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff...")
+                    # Log the resumption with a status message
+                    if data_fetch_started:
+                        resume_message = f"Resuming data fetch for {ticker} at record {row_count}"
+                    else:
+                        resume_message = f"Attempting to start data fetch for {ticker} again"
+
+                    logger.info(f"{resume_message} after {wait_time:.2f} seconds backoff")
                 else:
                     # Re-raise if it's not a 429 error or we've exceeded max retries
                     raise
 
         if row_count > 0:
-            log_with_timestamp(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
+            logger.info(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
             return output_filename  # Return the filename instead of the data
         else:
-            log_with_timestamp(f"No data returned for {ticker}.")
+            logger.info(f"No data returned for {ticker}.")
             raise RuntimeError(f"No data returned for {ticker}.")
 
     except Exception as e:
         error_str = str(e)
         if "429" in error_str:
-            log_with_timestamp(f"Rate limit hit for {ticker} at endpoint {endpoint} after {max_retries} retries.")
+            logger.error(f"Rate limit hit for {ticker} at endpoint {endpoint} after {max_retries} retries.")
             raise RuntimeError(f"Rate limit hit for {ticker}. Please wait before retrying.")
         else:
-            log_with_timestamp(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
+            logger.error(f"Error fetching data for {ticker} at endpoint {endpoint}: {e}")
             raise RuntimeError(f"Failed to fetch data for {ticker}: {e}")
 
 
@@ -203,9 +225,9 @@ def main():
     for ticker in tickers:
         ticker_metadata = get_ticker_metadata(ticker)
 
-        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'minute')
         fetch_from_polygon(from_date, s3_key_1hour, ticker, ticker_metadata, to_date, 1, 'hour')
         fetch_from_polygon(from_date, s3_key_1day, ticker, ticker_metadata, to_date, 1, 'day')
+        fetch_from_polygon(from_date, s3_key_1min, ticker, ticker_metadata, to_date, 1, 'minute')
 
 
 def fetch_from_polygon(from_date, s3_key, ticker, ticker_metadata, to_date, multiplier, timespan='minute'):
