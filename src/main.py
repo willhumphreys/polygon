@@ -7,6 +7,7 @@ import requests
 import argparse
 import logging
 import datetime
+from io import BytesIO
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -84,7 +85,7 @@ def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
 
     except Exception as e:
         logger.error(f"Error uploading file to S3: {str(e)}")
-        raise Exception(f"Error uploading file to S3: {str(e)}") from e
+        return False
 
 
 def get_tickers_from_args():
@@ -128,138 +129,6 @@ def get_tickers_from_args():
 
     return tickers, from_date, to_date, args.s3_key_min, args.s3_key_hour, args.s3_key_day
 
-def get_monthly_chunks(from_date, to_date):
-    """
-    Break down a date range into monthly chunks.
-
-    Args:
-        from_date (str): Start date in YYYY-MM-DD format
-        to_date (str): End date in YYYY-MM-DD format
-
-    Returns:
-        list: List of (start_date, end_date) tuples for each month
-    """
-    from_dt = datetime.datetime.strptime(from_date, '%Y-%m-%d')
-    to_dt = datetime.datetime.strptime(to_date, '%Y-%m-%d')
-
-    chunks = []
-    current_start = from_dt
-
-    while current_start <= to_dt:
-        # Calculate the end of the current month (or to_date if earlier)
-        if current_start.month == 12:
-            next_month_start = datetime.datetime(current_start.year + 1, 1, 1)
-        else:
-            next_month_start = datetime.datetime(current_start.year, current_start.month + 1, 1)
-
-        # Adjust the end date if it exceeds to_date
-        month_end = min(next_month_start - datetime.timedelta(days=1), to_dt)
-
-        # Add the chunk to the list
-        chunks.append((
-            current_start.strftime('%Y-%m-%d'),
-            month_end.strftime('%Y-%m-%d')
-        ))
-
-        # Set the next start date to the beginning of the next month
-        current_start = next_month_start
-
-    return chunks
-
-
-def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
-    """
-    Fetch data by month to avoid using pagination
-    """
-    output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
-
-    # Create empty CSV file
-    with open(output_filename, 'w') as f:
-        pass
-
-    # Get date chunks by month
-    date_chunks = get_monthly_chunks(from_date, to_date)
-
-    logger.info(f"Fetching {ticker} {timespan} data using {len(date_chunks)} monthly chunks")
-
-    total_row_count = 0
-    first_record = True
-
-    # Parameters for exponential backoff
-    max_retries = 5
-    base_wait_time = 15  # Start with 15 seconds
-
-    # Process each monthly chunk
-    for chunk_from, chunk_to in date_chunks:
-        base_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{chunk_from}/{chunk_to}"
-        params = {
-            "adjusted": "true",
-            "sort": "asc",
-            "limit": 50000,
-            "apiKey": polygon_api_key
-        }
-
-        retry_count = 0
-        success = False
-
-        while not success and retry_count <= max_retries:
-            try:
-                logger.info(f"Fetching {ticker} data for {chunk_from} to {chunk_to}")
-                response = requests.get(base_url, params=params)
-                response.raise_for_status()
-                data = response.json()
-                success = True
-
-            except requests.exceptions.RequestException as e:
-                error_str = str(e)
-                if "429" in error_str and retry_count < max_retries:
-                    retry_count += 1
-                    # Calculate wait time with exponential backoff and jitter
-                    wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
-
-                    logger.warning(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
-                    logger.warning(f"Backing off for {wait_time:.2f} seconds...")
-
-                    time.sleep(wait_time)
-
-                    logger.info(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff")
-                else:
-                    # Re-raise if it's not a 429 error or we've exceeded max retries
-                    logger.error(f"Error fetching data: {e}")
-                    raise Exception(f"Error fetching data: {e}") from e
-
-        if not success:
-            logger.error(f"Failed to fetch data after {max_retries} retries")
-            continue
-
-        # Process results and append to CSV
-        if 'results' in data and data['results']:
-            # Convert the results to a DataFrame and write to CSV
-            df = pd.DataFrame(data['results'])
-            df.to_csv(output_filename, mode='a', header=first_record, index=False)
-
-            if first_record:
-                first_record = False
-
-            batch_count = len(data['results'])
-            total_row_count += batch_count
-
-            # Log progress
-            logger.info(f"Processing {ticker}: {batch_count} records retrieved for {chunk_from} to {chunk_to}...")
-
-            # Add a small delay between requests to avoid rate limiting
-            time.sleep(0.5)
-
-        else:
-            logger.info(f"No data returned for {ticker} from {chunk_from} to {chunk_to}")
-
-    if total_row_count > 0:
-        logger.info(f"Retrieved and saved {total_row_count} results for {ticker} from {from_date} to {to_date}")
-        return output_filename
-    else:
-        logger.warning(f"No data returned for {ticker}.")
-        raise Exception(f"No data returned for {ticker}.")
-
 
 def main():
     """
@@ -298,6 +167,107 @@ def main():
             logger.error(f"Error processing ticker {ticker}: {str(e)}")
 
     logger.info("Data processing complete")
+
+
+def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
+    """
+    Fixed version of fetch_all_polygon_data that properly handles the API key during pagination
+    """
+    output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
+    base_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
+    params = {
+        "adjusted": "true",
+        "sort": "asc",
+        "limit": 50000,
+        "apiKey": polygon_api_key
+    }
+
+    # Create empty CSV file
+    with open(output_filename, 'w') as f:
+        pass
+
+    row_count = 0
+    first_record = True
+    current_url = base_url
+
+    # Parameters for exponential backoff
+    max_retries = 5
+    base_wait_time = 15  # Start with 15 seconds
+
+    while current_url:
+        retry_count = 0
+        success = False
+
+        while not success and retry_count <= max_retries:
+            try:
+                # For first request use params, for subsequent requests append the API key
+                if current_url == base_url:
+                    response = requests.get(current_url, params=params)
+                else:
+                    # Ensure the API key is added to the next_url
+                    if '?' in current_url:
+                        modified_url = f"{current_url}&apiKey={polygon_api_key}"
+                    else:
+                        modified_url = f"{current_url}?apiKey={polygon_api_key}"
+                    response = requests.get(modified_url)
+
+                response.raise_for_status()
+                data = response.json()
+                success = True
+
+            except requests.exceptions.RequestException as e:
+                error_str = str(e)
+                if "429" in error_str and retry_count < max_retries:
+                    retry_count += 1
+                    # Calculate wait time with exponential backoff and jitter
+                    wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
+
+                    print(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
+                    print(f"Backing off for {wait_time:.2f} seconds...")
+
+                    time.sleep(wait_time)
+
+                    print(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff")
+                else:
+                    # Re-raise if it's not a 429 error or we've exceeded max retries
+                    print(f"Error fetching data: {e}")
+                    return None
+
+        if not success:
+            print(f"Failed to fetch data after {max_retries} retries")
+            return None
+
+        # Process results and append to CSV
+        if 'results' in data and data['results']:
+            # Convert the results to a DataFrame and write to CSV
+            df = pd.DataFrame(data['results'])
+            df.to_csv(output_filename, mode='a', header=first_record, index=False)
+
+            if first_record:
+                first_record = False
+
+            batch_count = len(data['results'])
+            row_count += batch_count
+
+            # Log progress
+            print(f"Processing {ticker}: {row_count} records retrieved...")
+
+            # Check if there's a next page
+            current_url = data.get('next_url')
+
+            # Add a small delay between requests to avoid rate limiting
+            if current_url:
+                time.sleep(0.5)
+        else:
+            # No more results
+            current_url = None
+
+    if row_count > 0:
+        print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
+        return output_filename
+    else:
+        print(f"No data returned for {ticker}.")
+        return None
 
 
 if __name__ == "__main__":
