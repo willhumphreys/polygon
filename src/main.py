@@ -84,7 +84,7 @@ def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
 
     except Exception as e:
         logger.error(f"Error uploading file to S3: {str(e)}")
-        return False
+        raise Exception(f"Error uploading file to S3: {str(e)}") from e
 
 
 def get_tickers_from_args():
@@ -226,7 +226,7 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
                 else:
                     # Re-raise if it's not a 429 error or we've exceeded max retries
                     logger.error(f"Error fetching data: {e}")
-                    return None
+                    raise Exception(f"Error fetching data: {e}") from e
 
         if not success:
             logger.error(f"Failed to fetch data after {max_retries} retries")
@@ -258,7 +258,7 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
         return output_filename
     else:
         logger.warning(f"No data returned for {ticker}.")
-        return None
+        raise Exception(f"No data returned for {ticker}.")
 
 
 def main():
