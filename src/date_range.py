@@ -78,9 +78,9 @@ def analyze_date_range(csv_file):
 def main():
     # List of LZO files to process
     lzo_files = [
-        "MSFT/MSFT_polygon_day.csv.lzo",
-        "MSFT/MSFT_polygon_hour.csv.lzo",
-        "MSFT/MSFT_polygon_min.csv.lzo"
+        "TSLA/TSLA_polygon_day.csv.lzo",
+        "TSLA/TSLA_polygon_hour.csv.lzo",
+        "TSLA/TSLA_polygon_min.csv.lzo"
     ]
 
     # Get current directory

@@ -8,7 +8,6 @@ import argparse
 import logging
 import datetime
 from io import BytesIO
-import gzip
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -40,13 +39,13 @@ s3_client = boto3.client('s3')
 
 def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
     """
-    Compresses a file and uploads it to an S3 bucket.
-    
+    Compresses a file using LZO compression and uploads it to an S3 bucket.
+
     Args:
         file_path (str): Path to the local file to compress and upload
         bucket_name (str): Name of the S3 bucket
         object_key (str, optional): S3 object key. If not provided, the file name will be used
-        
+
     Returns:
         bool: True if upload was successful, False otherwise
     """
@@ -55,37 +54,34 @@ def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
         logger.error(f"File not found: {file_path}")
         return False
 
-    # If object_key is not provided, use the file name
+    # If object_key is not provided, use the file name with .lzo extension
     if object_key is None:
-        object_key = os.path.basename(file_path)
-
-    # Add .gz extension if not already present
-    if not object_key.endswith('.gz'):
-        object_key += '.gz'
+        object_key = os.path.basename(file_path) + '.lzo'
 
     try:
-        # Read the file and compress it
-        with open(file_path, 'rb') as file:
-            # Read the file into memory
-            file_data = file.read()
+        # Create a temporary file for the compressed data
+        temp_lzo_file = file_path + '.lzo'
 
-            # Compress the data
-            compressed_data = BytesIO()
-            with gzip.GzipFile(fileobj=compressed_data, mode='wb') as gz:
-                gz.write(file_data)
+        # Compress the file using lzop command line tool
+        compress_command = f"lzop -o {temp_lzo_file} {file_path}"
+        compression_result = os.system(compress_command)
 
-            # Reset the file pointer to the beginning
-            compressed_data.seek(0)
+        if compression_result != 0:
+            logger.error(f"Failed to compress file using lzop: {file_path}")
+            return False
 
-            # Upload the compressed data to S3
-            s3_client.upload_fileobj(
-                compressed_data,
-                bucket_name,
-                object_key
-            )
+        # Upload the compressed file to S3
+        s3_client.upload_file(
+            temp_lzo_file,
+            bucket_name,
+            object_key
+        )
 
-            logger.info(f"Successfully compressed and uploaded {file_path} to {bucket_name}/{object_key}")
-            return True
+        # Clean up the temporary file
+        os.remove(temp_lzo_file)
+
+        logger.info(f"Successfully compressed and uploaded {file_path} to {bucket_name}/{object_key}")
+        return True
 
     except Exception as e:
         logger.error(f"Error uploading file to S3: {str(e)}")
