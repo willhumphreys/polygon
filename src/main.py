@@ -105,7 +105,7 @@ def compress_and_upload_to_s3(file_path, bucket_name, object_key=None, metadata=
             s3_metadata = {}
             for key, value in metadata.items():
                 if isinstance(value, (str, int, float, bool)):
-                    s3_metadata[f'x-amz-meta-{key}'] = str(value)
+                    s3_metadata[str(key)] = str(value)
 
             if s3_metadata:
                 extra_args['Metadata'] = s3_metadata
@@ -182,7 +182,7 @@ def main():
     """
     Main function to orchestrate data fetching and processing.
     """
-    tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day = get_tickers_from_args()
+    tickers, from_date, to_date, _, _, _ = get_tickers_from_args()
 
     # Get S3 bucket name from environment
     bucket_name = os.environ.get('OUTPUT_BUCKET_NAME')
@@ -196,11 +196,13 @@ def main():
         logger.info(f"Processing ticker: {ticker}")
 
         try:
-
             ticker_info = get_ticker_info(ticker, api_key)
 
             if not ticker_info:
                 logger.error(f"Could not get ticker information for {ticker}. Continuing with data fetch anyway.")
+
+            # Determine market type
+            market_type = ticker_info.get('market', '').lower() if ticker_info else None
 
             # Create metadata dictionary from ticker info
             metadata = None
@@ -215,21 +217,25 @@ def main():
                     'currency': ticker_info.get('currency_name', '')
                 }
 
+            # Fetch data for each timeframe with market type
+            hour_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'hour', market_type)
+            day_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'day', market_type)
+            minute_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'minute', market_type)
 
-            # Fetch data for each timeframe
-            hour_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'hour')
-            day_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'day')
-            minute_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'minute')
+            # Create simplified S3 object keys without date components
+            hour_key = f"stocks/{ticker}/polygon/{ticker}_polygon_hour.csv.lzo"
+            day_key = f"stocks/{ticker}/polygon/{ticker}_polygon_day.csv.lzo"
+            minute_key = f"stocks/{ticker}/polygon/{ticker}_polygon_minute.csv.lzo"
 
-            # Upload to S3 if bucket name is provided
-            if hour_file and os.path.exists(hour_file) and s3_key_hour:
-                compress_and_upload_to_s3(hour_file, bucket_name, s3_key_hour, metadata)
+            # Upload to S3 with simplified keys
+            if hour_file and os.path.exists(hour_file):
+                compress_and_upload_to_s3(hour_file, bucket_name, hour_key, metadata)
 
-            if day_file and os.path.exists(day_file) and s3_key_day:
-                compress_and_upload_to_s3(day_file, bucket_name, s3_key_day, metadata)
+            if day_file and os.path.exists(day_file):
+                compress_and_upload_to_s3(day_file, bucket_name, day_key, metadata)
 
-            if minute_file and os.path.exists(minute_file) and s3_key_min:
-                compress_and_upload_to_s3(minute_file, bucket_name, s3_key_min, metadata)
+            if minute_file and os.path.exists(minute_file):
+                compress_and_upload_to_s3(minute_file, bucket_name, minute_key, metadata)
 
         except Exception as e:
             logger.error(f"Error processing ticker {ticker}: {str(e)}")
@@ -237,9 +243,20 @@ def main():
     logger.info("Data processing complete")
 
 
-def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
+def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market_type=None):
     """
-    Fixed version of fetch_all_polygon_data that properly handles the API key during pagination
+    Fetches data from Polygon API and formats decimal precision based on market type.
+
+    Args:
+        ticker (str): Ticker symbol
+        from_date (str): Start date
+        to_date (str): End date
+        multiplier (int): Time multiplier
+        timespan (str): Time span (minute, hour, day)
+        market_type (str, optional): Market type (e.g., 'stocks', 'crypto'). Used for decimal precision.
+
+    Returns:
+        str: Path to saved CSV file or None if no data
     """
     output_filename = os.path.join(output_dir, f"{ticker}_{timespan}_historical.csv")
     base_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
@@ -307,8 +324,17 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan):
 
         # Process results and append to CSV
         if 'results' in data and data['results']:
-            # Convert the results to a DataFrame and write to CSV
+            # Convert the results to a DataFrame
             df = pd.DataFrame(data['results'])
+
+            # For stocks, set precision to 2 decimal places for price columns
+            if market_type == 'stocks':
+                price_columns = ['o', 'h', 'l', 'c', 'vw']
+                for col in price_columns:
+                    if col in df.columns:
+                        df[col] = df[col].round(2)
+
+            # Write to CSV
             df.to_csv(output_filename, mode='a', header=first_record, index=False)
 
             if first_record:
