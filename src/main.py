@@ -1,4 +1,5 @@
 import os
+
 import pandas as pd
 import time
 import random
@@ -7,7 +8,6 @@ import requests
 import argparse
 import logging
 import datetime
-from io import BytesIO
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -36,15 +36,42 @@ if not api_key:
 # Initialize S3 client
 s3_client = boto3.client('s3')
 
-
-def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
+def get_ticker_info(ticker, api_key):
     """
-    Compresses a file using LZO compression and uploads it to an S3 bucket.
+    Fetches information about a ticker from the Polygon.io reference endpoint.
+
+    Args:
+        ticker (str): The ticker symbol to fetch information for
+        api_key (str): Polygon.io API key
+
+    Returns:
+        dict: Information about the ticker or None if the request fails
+    """
+    url = f"https://api.polygon.io/v3/reference/tickers/{ticker}?apiKey={api_key}"
+
+    try:
+        response = requests.get(url)
+        if response.status_code == 200:
+            data = response.json()
+            logger.info(f"Successfully fetched info for ticker {ticker}")
+            return data['results']
+        else:
+            logger.error(f"Failed to fetch info for ticker {ticker}: {response.status_code}")
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching ticker info: {str(e)}")
+        return None
+
+
+def compress_and_upload_to_s3(file_path, bucket_name, object_key=None, metadata=None):
+    """
+    Compresses a file using LZO compression and uploads it to an S3 bucket with metadata tags.
 
     Args:
         file_path (str): Path to the local file to compress and upload
         bucket_name (str): Name of the S3 bucket
         object_key (str, optional): S3 object key. If not provided, the file name will be used
+        metadata (dict, optional): Metadata to attach to the S3 object as tags
 
     Returns:
         bool: True if upload was successful, False otherwise
@@ -70,12 +97,33 @@ def compress_and_upload_to_s3(file_path, bucket_name, object_key=None):
             logger.error(f"Failed to compress file using lzop: {file_path}")
             return False
 
+        # Prepare extra args for S3 upload if metadata is provided
+        extra_args = {}
+        if metadata:
+            # Convert metadata to S3 metadata format
+            # S3 metadata keys must be prefixed with 'x-amz-meta-'
+            s3_metadata = {}
+            for key, value in metadata.items():
+                if isinstance(value, (str, int, float, bool)):
+                    s3_metadata[f'x-amz-meta-{key}'] = str(value)
+
+            if s3_metadata:
+                extra_args['Metadata'] = s3_metadata
+
         # Upload the compressed file to S3
-        s3_client.upload_file(
-            temp_lzo_file,
-            bucket_name,
-            object_key
-        )
+        if extra_args:
+            s3_client.upload_file(
+                temp_lzo_file,
+                bucket_name,
+                object_key,
+                ExtraArgs=extra_args
+            )
+        else:
+            s3_client.upload_file(
+                temp_lzo_file,
+                bucket_name,
+                object_key
+            )
 
         # Clean up the temporary file
         os.remove(temp_lzo_file)
@@ -148,6 +196,26 @@ def main():
         logger.info(f"Processing ticker: {ticker}")
 
         try:
+
+            ticker_info = get_ticker_info(ticker, api_key)
+
+            if not ticker_info:
+                logger.error(f"Could not get ticker information for {ticker}. Continuing with data fetch anyway.")
+
+            # Create metadata dictionary from ticker info
+            metadata = None
+            if ticker_info:
+                metadata = {
+                    'ticker': ticker,
+                    'name': ticker_info.get('name', ''),
+                    'market': ticker_info.get('market', ''),
+                    'locale': ticker_info.get('locale', ''),
+                    'primary_exchange': ticker_info.get('primary_exchange', ''),
+                    'type': ticker_info.get('type', ''),
+                    'currency': ticker_info.get('currency_name', '')
+                }
+
+
             # Fetch data for each timeframe
             hour_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'hour')
             day_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'day')
@@ -155,13 +223,13 @@ def main():
 
             # Upload to S3 if bucket name is provided
             if hour_file and os.path.exists(hour_file) and s3_key_hour:
-                compress_and_upload_to_s3(hour_file, bucket_name, s3_key_hour)
+                compress_and_upload_to_s3(hour_file, bucket_name, s3_key_hour, metadata)
 
             if day_file and os.path.exists(day_file) and s3_key_day:
-                compress_and_upload_to_s3(day_file, bucket_name, s3_key_day)
+                compress_and_upload_to_s3(day_file, bucket_name, s3_key_day, metadata)
 
             if minute_file and os.path.exists(minute_file) and s3_key_min:
-                compress_and_upload_to_s3(minute_file, bucket_name, s3_key_min)
+                compress_and_upload_to_s3(minute_file, bucket_name, s3_key_min, metadata)
 
         except Exception as e:
             logger.error(f"Error processing ticker {ticker}: {str(e)}")
