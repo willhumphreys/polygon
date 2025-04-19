@@ -182,7 +182,7 @@ def main():
     """
     Main function to orchestrate data fetching and processing.
     """
-    tickers, from_date, to_date, _, _, _ = get_tickers_from_args()
+    tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day = get_tickers_from_args()
 
     # Get S3 bucket name from environment
     bucket_name = os.environ.get('OUTPUT_BUCKET_NAME')
@@ -223,9 +223,9 @@ def main():
             minute_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'minute', market_type)
 
             # Create simplified S3 object keys without date components
-            hour_key = f"stocks/{ticker}/polygon/{ticker}_polygon_hour.csv.lzo"
-            day_key = f"stocks/{ticker}/polygon/{ticker}_polygon_day.csv.lzo"
-            minute_key = f"stocks/{ticker}/polygon/{ticker}_polygon_minute.csv.lzo"
+            hour_key = s3_key_hour
+            day_key = s3_key_min
+            minute_key = s3_key_day
 
             # Upload to S3 with simplified keys
             if hour_file and os.path.exists(hour_file):
