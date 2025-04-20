@@ -28,11 +28,6 @@ output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
 # Create the output directory if it doesn't exist
 os.makedirs(output_dir, exist_ok=True)
 
-# Get API key from environment
-api_key = os.environ.get('POLYGON_API_KEY')
-if not api_key:
-    raise ValueError("Please set the POLYGON_API_KEY environment variable")
-
 # Initialize S3 client
 s3_client = boto3.client('s3')
 
@@ -186,6 +181,7 @@ def main():
 
     # Get S3 bucket name from environment
     bucket_name = os.environ.get('OUTPUT_BUCKET_NAME')
+    polygon_api_key = os.environ.get('POLYGON_API_KEY')
     if not bucket_name:
         raise ValueError("OUTPUT_BUCKET_NAME environment variable is not set. Cannot proceed without S3 bucket name.")
 
@@ -196,7 +192,7 @@ def main():
         logger.info(f"Processing ticker: {ticker}")
 
         try:
-            ticker_info = get_ticker_info(ticker, api_key)
+            ticker_info = get_ticker_info(ticker, polygon_api_key)
 
             if not ticker_info:
                 logger.error(f"Could not get ticker information for {ticker}. Continuing with data fetch anyway.")
@@ -322,17 +318,21 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
             print(f"Failed to fetch data after {max_retries} retries")
             return None
 
+        precious_metals_prefixes = ["C:XAU", "C:XAG", "C:XPT", "C:XPD"]  # Gold, Silver, Platinum, Palladium
+
         # Process results and append to CSV
         if 'results' in data and data['results']:
             # Convert the results to a DataFrame
             df = pd.DataFrame(data['results'])
 
-            # For stocks, set precision to 2 decimal places for price columns
-            if market_type == 'stocks':
-                price_columns = ['o', 'h', 'l', 'c', 'vw']
-                for col in price_columns:
-                    if col in df.columns:
-                        df[col] = df[col].round(2)
+        is_precious_metal = any(ticker.startswith(prefix) for prefix in precious_metals_prefixes)
+
+        if market_type == 'stocks' or is_precious_metal:
+            price_columns = ['o', 'h', 'l', 'c', 'vw']
+            for col in price_columns:
+                if col in df.columns:
+                    df[col] = df[col].round(2)
+
 
             # Write to CSV
             df.to_csv(output_filename, mode='a', header=first_record, index=False)
