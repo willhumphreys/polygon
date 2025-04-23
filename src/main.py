@@ -334,27 +334,24 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
                     df[col] = df[col].round(2)
 
 
-            # Write to CSV
-            df.to_csv(output_filename, mode='a', header=first_record, index=False)
+        # Write to CSV
+        df.to_csv(output_filename, mode='a', header=first_record, index=False)
 
-            if first_record:
-                first_record = False
+        if first_record:
+            first_record = False
 
-            batch_count = len(data['results'])
-            row_count += batch_count
+        batch_count = len(data['results'])
+        row_count += batch_count
 
-            # Log progress
-            print(f"Processing {ticker}: {row_count} records retrieved...")
+        # Log progress
+        print(f"Processing {ticker}: {row_count} records retrieved...")
 
-            # Check if there's a next page
-            current_url = data.get('next_url')
+        # Check if there's a next page
+        current_url = data.get('next_url')
 
-            # Add a small delay between requests to avoid rate limiting
-            if current_url:
-                time.sleep(0.5)
-        else:
-            # No more results
-            current_url = None
+        # Add a small delay between requests to avoid rate limiting
+        if current_url:
+            time.sleep(0.5)
 
     if row_count > 0:
         print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
