@@ -361,7 +361,7 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
         return output_filename
     else:
         print(f"No data returned for {ticker}.")
-        return None
+        raise ValueError("No data returned for ticker.")
 
 
 if __name__ == "__main__":
