@@ -220,8 +220,8 @@ def main():
 
             # Create simplified S3 object keys without date components
             hour_key = s3_key_hour
-            day_key = s3_key_min
-            minute_key = s3_key_day
+            day_key =  s3_key_day
+            minute_key = s3_key_min
 
             # Upload to S3 with simplified keys
             if hour_file and os.path.exists(hour_file):
