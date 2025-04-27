@@ -303,20 +303,20 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
                     # Calculate wait time with exponential backoff and jitter
                     wait_time = base_wait_time * (2 ** (retry_count - 1)) * (1 + random.random() * 0.2)
 
-                    print(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
-                    print(f"Backing off for {wait_time:.2f} seconds...")
+                    logger.warning(f"Rate limit hit (429 error). Retry attempt {retry_count}/{max_retries}.")
+                    logger.info(f"Backing off for {wait_time:.2f} seconds...")
 
                     time.sleep(wait_time)
 
-                    print(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff")
+                    logger.info(f"Resuming data fetch for {ticker} after {wait_time:.2f} seconds backoff")
                 else:
                     # Re-raise if it's not a 429 error or we've exceeded max retries
-                    print(f"Error fetching data: {e}")
-                    return None
+                    logger.error(f"Error fetching data: {e}")
+                    raise ValueError(f"Failed to fetch data after {max_retries} retries for {ticker}")
 
         if not success:
-            print(f"Failed to fetch data after {max_retries} retries")
-            return None
+            logger.error(f"Failed to fetch data after {max_retries} retries for {ticker}")
+            raise ValueError(f"Failed to fetch data after {max_retries} retries for {ticker}")
 
         precious_metals_prefixes = ["C:XAU", "C:XAG", "C:XPT", "C:XPD"]  # Gold, Silver, Platinum, Palladium
 
@@ -324,6 +324,10 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
         if 'results' in data and data['results']:
             # Convert the results to a DataFrame
             df = pd.DataFrame(data['results'])
+        else:
+            # No results, log and break
+            logger.error(f"No results found for {ticker} in current batch.")
+            raise ValueError("No results found for {ticker} in current batch.")
 
         is_precious_metal = any(ticker.startswith(prefix) for prefix in precious_metals_prefixes)
 
@@ -332,7 +336,6 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
             for col in price_columns:
                 if col in df.columns:
                     df[col] = df[col].round(2)
-
 
         # Write to CSV
         df.to_csv(output_filename, mode='a', header=first_record, index=False)
@@ -344,7 +347,7 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
         row_count += batch_count
 
         # Log progress
-        print(f"Processing {ticker}: {row_count} records retrieved...")
+        logger.info(f"Processing {ticker}: {row_count} records retrieved...")
 
         # Check if there's a next page
         current_url = data.get('next_url')
@@ -354,12 +357,8 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
             time.sleep(0.5)
 
     if row_count > 0:
-        print(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
+        logger.info(f"Retrieved and saved {row_count} results for {ticker} from {from_date} to {to_date}")
         return output_filename
     else:
-        print(f"No data returned for {ticker}.")
+        logger.warning(f"No data returned for {ticker} in date range {from_date} to {to_date}")
         raise ValueError("No data returned for ticker.")
-
-
-if __name__ == "__main__":
-    main()
