@@ -362,3 +362,6 @@ def fetch_data_with_key(ticker, from_date, to_date, multiplier, timespan, market
     else:
         logger.warning(f"No data returned for {ticker} in date range {from_date} to {to_date}")
         raise ValueError("No data returned for ticker.")
+
+if __name__ == "__main__":
+    main()
