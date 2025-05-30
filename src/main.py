@@ -136,7 +136,7 @@ def get_tickers_from_args():
     Parse command-line arguments to get ticker symbols, date range, and S3 keys.
 
     Returns:
-        tuple: (list of tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day)
+        tuple: (list of tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day, back_test_id)
     """
     parser = argparse.ArgumentParser(description='Fetch and process historical market data.')
 
@@ -148,6 +148,7 @@ def get_tickers_from_args():
     parser.add_argument('--s3_key_min', required=False, help='S3 key for minute data')
     parser.add_argument('--s3_key_hour', required=False, help='S3 key for hour data')
     parser.add_argument('--s3_key_day', required=False, help='S3 key for day data')
+    parser.add_argument('--back_test_id', required=False, help='Back test ID')
 
     args = parser.parse_args()
 
@@ -170,14 +171,14 @@ def get_tickers_from_args():
     from_date = args.from_date or (datetime.datetime.now() - datetime.timedelta(days=30)).strftime('%Y-%m-%d')
     to_date = args.to_date or datetime.datetime.now().strftime('%Y-%m-%d')
 
-    return tickers, from_date, to_date, args.s3_key_min, args.s3_key_hour, args.s3_key_day
+    return tickers, from_date, to_date, args.s3_key_min, args.s3_key_hour, args.s3_key_day, args.back_test_id
 
 
 def main():
     """
     Main function to orchestrate data fetching and processing.
     """
-    tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day = get_tickers_from_args()
+    tickers, from_date, to_date, s3_key_min, s3_key_hour, s3_key_day, back_test_id = get_tickers_from_args()
 
     # Get S3 bucket name from environment
     bucket_name = os.environ.get('OUTPUT_BUCKET_NAME')
@@ -186,6 +187,8 @@ def main():
         raise ValueError("OUTPUT_BUCKET_NAME environment variable is not set. Cannot proceed without S3 bucket name.")
 
     logger.info(f"Processing {len(tickers)} tickers from {from_date} to {to_date}")
+    if back_test_id:
+        logger.info(f"Back test ID: {back_test_id}")
 
     # Process each ticker
     for ticker in tickers:
