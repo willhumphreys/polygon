@@ -222,11 +222,9 @@ def main():
             minute_file = fetch_data_with_key(ticker, from_date, to_date, 1, 'minute', market_type)
 
             # Create simplified S3 object keys without date components
-            # Prefix S3 keys with back_test_id if available
-            prefix = f"{back_test_id}/" if back_test_id else ""
-            hour_key = f"{prefix}{s3_key_hour}" if s3_key_hour else None
-            day_key = f"{prefix}{s3_key_day}" if s3_key_day else None
-            minute_key = f"{prefix}{s3_key_min}" if s3_key_min else None
+            hour_key = s3_key_hour
+            day_key =  s3_key_day
+            minute_key = s3_key_min
 
             # Upload to S3 with simplified keys
             if hour_file and os.path.exists(hour_file):
